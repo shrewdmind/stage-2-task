@@ -74,22 +74,22 @@ You should see:
 
 
 ## ✅ Test the Setup
-# Check the active version
+Check the active version
 `curl -i http://localhost:8080/version`
 
-# You should see:
+You should see:
 `X-App-Pool: blue`
 
-# Simulate a Blue failure
+Simulate a Blue failure
 `curl -X POST http://localhost:8081/chaos/start?mode=error`
 
-# Now, test again:
+Now, test again:
 `curl -i http://localhost:8080/version`
 
-# You should see:
+You should see:
 `X-App-Pool: green`
 
-# Stop the failure
+Stop the failure
 `curl -X POST http://localhost:8081/chaos/stop`
 Blue will recover and become active again.
 
@@ -98,10 +98,10 @@ Run:
 `bash tests/failover_test.sh`
 This automatically simulates a failure and verifies the system switches from Blue → Green with no downtime.
 
-## 🧹 Stop Everything
+🧹 Stop Everything
 `docker-compose down`
 
-## 💡 Notes
+💡 Notes
 - All traffic goes through Nginx (http://localhost:8080)
 - Blue and Green are available directly on:
   - Blue → http://localhost:8081
