@@ -26,6 +26,7 @@ Make sure you have the following installed:
 ---
 
 ## 📁 Project Structure
+```
 .
 ├── .env
 ├── docker-compose.yml
@@ -36,6 +37,7 @@ Make sure you have the following installed:
     ├── smoke.sh
     ├── induce_chaos.sh
     └── failover_test.sh
+```
 
 ---
 
