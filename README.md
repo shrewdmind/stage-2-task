@@ -52,9 +52,11 @@ PORT=8081
 ```
 
 ## ▶️ How to Run
-# 1. Clone the repository
-`git clone <repo-link>`
-`cd <repo-folder>`
+1. Clone the repository
+```
+git clone <repo-link>
+cd <repo-folder>
+```
 
 2. Create the .env file
 Copy the example above and update the values if needed.
@@ -65,7 +67,7 @@ Copy the example above and update the values if needed.
 4. Check running containers
 `docker ps`
 
-# You should see:
+You should see:
 - app_blue
 - app_green
 - nginx
@@ -91,15 +93,15 @@ Copy the example above and update the values if needed.
 `curl -X POST http://localhost:8081/chaos/stop`
 Blue will recover and become active again.
 
-# 🧪 Optional Quick Test Script
+## 🧪 Optional Quick Test Script
 Run:
 `bash tests/failover_test.sh`
 This automatically simulates a failure and verifies the system switches from Blue → Green with no downtime.
 
-# 🧹 Stop Everything
+## 🧹 Stop Everything
 `docker-compose down`
 
-# 💡 Notes
+## 💡 Notes
 - All traffic goes through Nginx (http://localhost:8080)
 - Blue and Green are available directly on:
   - Blue → http://localhost:8081
