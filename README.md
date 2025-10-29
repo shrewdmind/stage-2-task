@@ -64,10 +64,14 @@ cd <repo-folder>
 Copy the example above and update the values if needed.
 
 3. Start the containers
-`docker-compose up -d`
+```
+docker-compose up -d
+```
 
-4. Check running containers
-`docker ps`
+5. Check running containers
+```
+docker ps
+```
 
 You should see:
 - app_blue
@@ -77,31 +81,47 @@ You should see:
 
 ## ✅ Test the Setup
 Check the active version
-`curl -i http://localhost:8080/version`
+```
+curl -i http://localhost:8080/version
+```
 
 You should see:
-`X-App-Pool: blue`
+```
+X-App-Pool: blue
+```
 
 Simulate a Blue failure
-`curl -X POST http://localhost:8081/chaos/start?mode=error`
+```
+curl -X POST http://localhost:8081/chaos/start?mode=error
+```
 
 Now, test again:
-`curl -i http://localhost:8080/version`
+```
+curl -i http://localhost:8080/version
+```
 
 You should see:
-`X-App-Pool: green`
+```
+X-App-Pool: green
+```
 
 Stop the failure
-`curl -X POST http://localhost:8081/chaos/stop`
+```
+curl -X POST http://localhost:8081/chaos/stop
+```
 Blue will recover and become active again.
 
 ## 🧪 Optional Quick Test Script
 Run:
-`bash tests/failover_test.sh`
+```
+bash tests/failover_test.sh
+```
 This automatically simulates a failure and verifies the system switches from Blue → Green with no downtime.
 
 🧹 Stop Everything
-`docker-compose down`
+```
+docker-compose down
+```
 
 💡 Notes
 - All traffic goes through Nginx (http://localhost:8080)
