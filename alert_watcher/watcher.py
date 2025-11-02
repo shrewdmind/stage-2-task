@@ -18,8 +18,7 @@ class LogWatcher:
         self.last_alert_time = {}
         self.current_pool = os.getenv('INITIAL_ACTIVE_POOL', 'blue')
         self.last_seen_pool = self.current_pool
-        self.failover_count = 0
-        self.primary_recovered = False
+        self.error_alert_sent = False
         
         self.slack_client = WebhookClient(self.slack_webhook) if self.slack_webhook else None
         
@@ -86,20 +85,8 @@ class LogWatcher:
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"🚨 *Deployment Alert - {severity.upper()}*\n{message}"
+                            "text": message
                         }
-                    },
-                    {
-                        "type": "divider"
-                    },
-                    {
-                        "type": "context",
-                        "elements": [
-                            {
-                                "type": "mrkdwn",
-                                "text": f"🕒 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')} | 🔧 Environment: {os.getenv('ENVIRONMENT', 'production')} | 📊 Window: {self.window_size} requests"
-                            }
-                        ]
                     }
                 ]
             )
@@ -112,74 +99,45 @@ class LogWatcher:
             print(f"Error sending Slack alert: {e}")
     
     def detect_failover(self, pool):
-        """Detect and alert on failover events with detailed information"""
+        """Detect and alert on failover events"""
         if pool and pool != self.last_seen_pool:
-            self.failover_count += 1
-            
-            # Determine if this is a recovery (back to original) or new failover
-            if pool == os.getenv('INITIAL_ACTIVE_POOL', 'blue'):
-                message = (f"✅ *Service Recovery*\n"
-                          f"Traffic has returned to the primary {pool.upper()} pool.\n"
-                          f"• Previous pool: {self.last_seen_pool.upper()}\n"
-                          f"• Current pool: {pool.upper()}\n"
-                          f"• Total failovers in session: {self.failover_count}")
-                self.send_slack_alert(message, 'recovery', 'recovery')
-                self.primary_recovered = True
-            else:
-                message = (f"⚠️ *Failover Detected*\n"
-                          f"Automatic failover from {self.last_seen_pool.upper()} to {pool.upper()} pool.\n"
-                          f"• Failed pool: {self.last_seen_pool.upper()}\n"
-                          f"• Backup pool: {pool.upper()}\n"
-                          f"• Failover count: {self.failover_count}\n"
-                          f"• Timestamp: {datetime.now().strftime('%H:%M:%S')}")
-                self.send_slack_alert(message, 'failover', 'error')
-                self.primary_recovered = False
-            
+            message = (f"⚠️ *Failover Detected*\n"
+                      f"Traffic switched from *{self.last_seen_pool.upper()}* to *{pool.upper()}* pool\n"
+                      f"• Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            self.send_slack_alert(message, 'failover', 'warning')
             self.last_seen_pool = pool
     
     def monitor_error_rate(self, log_data):
         """Monitor and alert on error rates with detailed metrics"""
         if log_data.get('upstream_status'):
             self.request_window.append(log_data)
-            error_rate = self.calculate_error_rate()
             
-            if error_rate > self.error_threshold:
+            # Only check error rate if we have enough data in the window
+            if len(self.request_window) >= 50:  # Minimum samples for meaningful rate
+                error_rate = self.calculate_error_rate()
                 error_count = sum(1 for req in self.request_window 
                                  if req.get('upstream_status', '').startswith('5'))
                 total_requests = len(self.request_window)
                 
-                message = (f"🔴 *High Error Rate Alert*\n"
-                          f"Current error rate {error_rate:.1f}% exceeds threshold of {self.error_threshold}%.\n"
-                          f"• Errors: {error_count}/{total_requests} requests\n"
-                          f"• Current pool: {self.current_pool.upper()}\n"
-                          f"• Time window: Last {total_requests} requests\n"
-                          f"• Threshold: {self.error_threshold}%\n\n"
-                          f"*Recommended Actions:*\n"
-                          f"• Check application logs for errors\n"
-                          f"• Verify database connections\n"
-                          f"• Check resource utilization\n"
-                          f"• Consider rolling back if recent deployment")
+                # Debug output
+                print(f"DEBUG: Error rate: {error_rate:.1f}% ({error_count}/{total_requests})")
                 
-                self.send_slack_alert(message, 'error_rate', 'error')
-    
-    def monitor_service_health(self, log_data):
-        """Monitor for service recovery and health improvements"""
-        if log_data.get('upstream_status') and not log_data['upstream_status'].startswith('5'):
-            # Check if we recently had high errors but now seeing success
-            if len(self.request_window) >= 10:  # Only check if we have enough data
-                recent_errors = sum(1 for req in list(self.request_window)[-10:] 
-                                  if req.get('upstream_status', '').startswith('5'))
+                if error_rate > self.error_threshold and not self.error_alert_sent:
+                    message = (f"🚨 *High Error Rate Detected*\n"
+                              f"• Error Rate: `{error_rate:.1f}%`\n"
+                              f"• Threshold: `{self.error_threshold}%`\n"
+                              f"• Errors: `{error_count}/{total_requests}`\n"
+                              f"• Time: `{datetime.now().isoformat()}`\n"
+                              f"• Total Requests: `{total_requests}`\n"
+                              f"• Window: `{self.window_size}` requests\n"
+                              f"• Current Pool: `{self.current_pool.upper()}`")
+                    
+                    self.send_slack_alert(message, 'error_rate', 'error')
+                    self.error_alert_sent = True
                 
-                if recent_errors == 0 and self.last_alert_time.get('error_rate', 0) > 0:
-                    # We had errors before but now recovering
-                    time_since_last_error_alert = time.time() - self.last_alert_time.get('error_rate', 0)
-                    if time_since_last_error_alert < 600:  # Only alert if recovery within 10 min of error
-                        message = (f"🟢 *Error Rate Recovery*\n"
-                                  f"Error rate has returned to normal levels.\n"
-                                  f"• Last {len(self.request_window)} requests: 0 errors\n"
-                                  f"• Current pool: {self.current_pool.upper()}\n"
-                                  f"• Recovery time: {datetime.now().strftime('%H:%M:%S')}")
-                        self.send_slack_alert(message, 'recovery', 'info')
+                # Reset error alert sent flag if error rate drops below threshold
+                elif error_rate <= self.error_threshold and self.error_alert_sent:
+                    self.error_alert_sent = False
     
     def process_log_line(self, line):
         """Process a single log line"""
@@ -189,14 +147,11 @@ class LogWatcher:
         
         pool = log_data.get('pool')
         
-        # Detect failovers
-        self.detect_failover(pool)
-        
-        # Monitor error rates
+        # Monitor error rates FIRST (before failover detection)
         self.monitor_error_rate(log_data)
         
-        # Monitor service health recovery
-        self.monitor_service_health(log_data)
+        # Then detect failovers
+        self.detect_failover(pool)
         
         # Update current pool for tracking
         if pool:
