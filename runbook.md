@@ -2,38 +2,39 @@
 
 ## Alert Types and Responses
 
-### 🔴 High Error Rate Alert
-**What happened**: Error rate exceeded configured threshold (default: 2%)
+### 🚨 High Error Rate Detected
+**What happened**: >2% of last 200 requests returned 5xx errors
 **Immediate Actions**:
 1. Check which pool is currently active
-2. Review application logs for the failing pool
+2. Review application logs for the failing pool  
 3. Check database connections and external dependencies
 4. Verify resource utilization (CPU, Memory, Disk)
 **Follow-up**: Consider rollback if error started after deployment
 
-### ⚠️ Failover Alert  
+### ⚠️ Failover Detected
 **What happened**: Traffic automatically switched from primary to backup pool
 **Immediate Actions**:
-1. Identify why primary pool failed
-2. Check if failover was successful
-3. Monitor backup pool performance
-4. Document the incident
+1. Identify why primary pool failed - check container health
+2. Verify failover was successful - check backup pool performance
+3. Monitor backup pool for any issues
+4. Document the incident timeline
 **Follow-up**: Plan primary pool restoration
 
-### ✅ Service Recovery Alert
+### ✅ Service Recovery  
 **What happened**: Traffic returned to primary pool after failover
 **Immediate Actions**:
-1. Verify primary pool is healthy
-2. Check that all services are responding
-3. Monitor for any residual issues
+1. Verify primary pool is healthy and responding
+2. Check that all services are functioning normally
+3. Monitor for any residual issues or error rates
+4. Update incident documentation
 **Follow-up**: Analyze root cause of original failure
 
-### 🟢 Error Rate Recovery Alert
-**What happened**: Error rate returned to normal after being elevated
+### 🟢 Error Rate Recovery
+**What happened**: 5xx error rate returned to normal levels
 **Immediate Actions**:
-1. Confirm error rate is stable
-2. Check if automatic recovery occurred or if intervention was needed
-3. Update monitoring if needed
+1. Confirm error rate is stable and below threshold
+2. Check if automatic recovery occurred or intervention was needed
+3. Verify all services are operating normally
 **Follow-up**: Document resolution for future reference
 
 **Immediate Actions**:

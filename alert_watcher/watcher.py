@@ -20,7 +20,9 @@ class LogWatcher:
         self.last_alert_time = {}
         self.current_pool = os.getenv('INITIAL_ACTIVE_POOL', 'blue')
         self.last_seen_pool = self.current_pool
+        self.initial_pool = self.current_pool  # Track original pool for recovery
         self.error_alert_sent = False
+        self.failover_occurred = False
         
         # Initialize Slack client
         if self.slack_webhook:
@@ -97,10 +99,28 @@ class LogWatcher:
             
             message = (f"⚠️ *Failover Detected*\n"
                       f"Traffic switched from {self.last_seen_pool.upper()} to {pool.upper()} pool\n"
-                      f"• Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+                      f"• Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+                      f"• Action: Check health of {self.last_seen_pool.upper()} container")
             
             if self.send_slack_alert(message, 'failover'):
                 self.last_seen_pool = pool
+                self.failover_occurred = True
+    
+    def detect_service_recovery(self, pool):
+        """Detect when service returns to primary pool"""
+        if (self.failover_occurred and 
+            pool == self.initial_pool and 
+            pool != self.last_seen_pool):
+            
+            print(f"🟢 SERVICE RECOVERY: Back to {pool.upper()} pool")
+            
+            message = (f"✅ *Service Recovery*\n"
+                      f"Primary {pool.upper()} pool is serving traffic again\n"
+                      f"• Recovery Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+                      f"• Status: Primary pool restored and healthy")
+            
+            if self.send_slack_alert(message, 'recovery'):
+                self.failover_occurred = False
     
     def monitor_error_rate(self, log_data):
         """Monitor >2% 5xx error rate over last 200 requests"""
@@ -121,18 +141,25 @@ class LogWatcher:
                 print(f"🚨 HIGH ERROR RATE: {error_rate:.1f}% > {self.error_threshold}%")
                 
                 message = (f"🚨 *High Error Rate Detected*\n"
-                          f"Error rate exceeds {self.error_threshold}% threshold\n"
+                          f"Upstream 5xx errors exceed {self.error_threshold}% threshold\n"
                           f"• Current Rate: {error_rate:.1f}%\n"
                           f"• Errors: {error_count}/{current_size} requests\n"
                           f"• Window: Last {self.window_size} requests\n"
                           f"• Pool: {self.current_pool.upper()}\n"
-                          f"• Time: {datetime.now().isoformat()}")
+                          f"• Time: {datetime.now().isoformat()}\n"
+                          f"• Action: Inspect upstream logs, consider pool toggle")
                 
                 if self.send_slack_alert(message, 'error_rate'):
                     self.error_alert_sent = True
             
-            # Reset when errors drop
-            elif error_rate <= self.error_threshold and self.error_alert_sent:
+            # Reset when errors drop and send recovery alert
+            elif error_rate <= 1.0 and self.error_alert_sent:  # Use 1% as recovery threshold
+                print("📉 Error rate returned to normal levels")
+                recovery_message = (f"🟢 *Error Rate Recovery*\n"
+                                  f"5xx error rate returned to normal: {error_rate:.1f}%\n"
+                                  f"• Recovery Time: {datetime.now().isoformat()}\n"
+                                  f"• Status: Error rate stabilized")
+                self.send_slack_alert(recovery_message, 'error_recovery')
                 self.error_alert_sent = False
     
     def process_log_line(self, line):
@@ -143,13 +170,19 @@ class LogWatcher:
         
         pool = log_data.get('pool')
         
-        # Update pool and detect failovers
+        # Update pool and detect failovers/recovery
         if pool:
-            if pool != self.current_pool:
-                self.current_pool = pool
+            old_pool = self.current_pool
+            self.current_pool = pool
+            
+            # Detect failover to backup pool
+            if pool != old_pool:
                 self.detect_failover(pool)
+            
+            # Detect recovery back to primary pool
+            self.detect_service_recovery(pool)
         
-        # Monitor error rates - CRITICAL: This must work!
+        # Monitor error rates
         self.monitor_error_rate(log_data)
     
     def watch_logs(self):
@@ -157,7 +190,7 @@ class LogWatcher:
         log_file = '/var/log/nginx/access.log'
         
         print(f"📁 Monitoring: {log_file}")
-        print("🎯 Detecting: Failovers & High Error Rates")
+        print("🎯 Detecting: Failovers, High Error Rates, Service Recovery")
         
         # Wait for log file
         while not os.path.exists(log_file):
