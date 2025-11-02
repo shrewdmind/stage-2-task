@@ -152,17 +152,27 @@ class LogWatcher:
         
         print(f"Monitoring log file: {log_file}")
         
-        # Tail the log file
-        with open(log_file, 'r') as f:
-            # Go to end of file
-            f.seek(0, 2)
-            
-            while True:
-                line = f.readline()
-                if line:
-                    self.process_log_line(line.strip())
-                else:
-                    time.sleep(0.1)
+        # Simple tail implementation without seeking
+        while True:
+            try:
+                with open(log_file, 'r') as f:
+                    # Read all current content
+                    lines = f.readlines()
+                    
+                    # Process existing lines
+                    for line in lines:
+                        self.process_log_line(line.strip())
+                    
+                    # Continue reading new lines
+                    while True:
+                        line = f.readline()
+                        if line:
+                            self.process_log_line(line.strip())
+                        else:
+                            time.sleep(0.1)
+            except (IOError, FileNotFoundError) as e:
+                print(f"Error reading log file: {e}, retrying in 2 seconds...")
+                time.sleep(2)
 
 if __name__ == '__main__':
     watcher = LogWatcher()
