@@ -8,7 +8,7 @@ from datetime import datetime
 
 class LogWatcher:
     def __init__(self):
-        # Environment variables for configuration
+        # Environment variables from .env
         self.slack_webhook = os.getenv('SLACK_WEBHOOK_URL')
         self.error_threshold = float(os.getenv('ERROR_RATE_THRESHOLD', 2))
         self.window_size = int(os.getenv('WINDOW_SIZE', 200))
@@ -22,15 +22,15 @@ class LogWatcher:
         self.last_seen_pool = self.current_pool
         self.error_alert_sent = False
         
-        # Initialize Slack client PROPERLY
+        # Initialize Slack client
         if self.slack_webhook:
             self.slack_client = WebhookClient(self.slack_webhook)
-            print(f"✅ Slack client initialized with webhook")
+            print("✅ Slack client initialized")
         else:
             self.slack_client = None
-            print("❌ SLACK_WEBHOOK_URL not set - alerts will be logged only")
+            print("❌ SLACK_WEBHOOK_URL not set")
         
-        # Log patterns for parsing
+        # Log parsing pattern - captures all required fields
         self.log_pattern = re.compile(
             r'\[(?P<timestamp>[^\]]+)\] (?P<remote_addr>\S+) "(?P<request>[^"]*)" (?P<status>\d+) '
             r'pool="(?P<pool>[^"]*)" '
@@ -42,107 +42,68 @@ class LogWatcher:
         )
     
     def parse_log_line(self, line):
-        """Parse log line to extract: pool, release, upstream_status, latency, upstream_addr"""
+        """Parse log line to extract all required fields"""
         match = self.log_pattern.match(line)
         if match:
-            data = match.groupdict()
-            # Debug: Show we're capturing all required fields
-            if len(self.request_window) % 50 == 0:  # Log every 50th request
-                print(f"📝 Log parsed: pool={data.get('pool')}, upstream_status={data.get('upstream_status')}, "
-                      f"request_time={data.get('request_time')}, upstream_addr={data.get('upstream_addr')}")
-            return data
+            return match.groupdict()
         return None
     
     def calculate_error_rate(self):
         """Calculate 5xx error rate over sliding window"""
-        if len(self.request_window) < 10:  # Minimum samples
+        if len(self.request_window) == 0:
             return 0.0
         
         error_count = sum(1 for req in self.request_window 
                          if req.get('upstream_status', '').startswith('5'))
-        error_rate = (error_count / len(self.request_window)) * 100
-        
-        # Show error rate progress
-        if len(self.request_window) % 25 == 0:
-            print(f"📊 Error Rate: {error_rate:.1f}% ({error_count}/{len(self.request_window)} requests)")
-        
-        return error_rate
+        return (error_count / len(self.request_window)) * 100
     
     def should_alert(self, alert_type):
-        """Enforce alert cooldown periods using environment variable"""
+        """Enforce alert cooldowns to prevent spam"""
         now = time.time()
         last_time = self.last_alert_time.get(alert_type, 0)
-        can_alert = (now - last_time) >= self.cooldown_sec
-        
-        if not can_alert:
-            remaining = int(self.cooldown_sec - (now - last_time))
-            print(f"⏰ Cooldown active for {alert_type}: {remaining}s remaining")
-        
-        return can_alert
+        return (now - last_time) >= self.cooldown_sec
     
     def send_slack_alert(self, message, alert_type):
-        """Post formatted alert to Slack using official SDK"""
+        """Post alert to Slack webhook"""
         if self.maintenance_mode:
-            print(f"🔧 MAINTENANCE MODE: Suppressed {alert_type} alert")
+            print(f"🔧 MAINTENANCE: Suppressed {alert_type}")
             return False
             
         if not self.slack_client:
-            print(f"❌ Slack client not initialized - cannot send {alert_type} alert")
+            print(f"❌ No Slack client for {alert_type}")
             return False
             
         if not self.should_alert(alert_type):
-            print(f"⏰ Cooldown active for {alert_type} alert")
+            print(f"⏰ Cooldown active for {alert_type}")
             return False
         
         try:
-            print(f"📤 Sending {alert_type} alert to Slack...")
-            
-            # Use the proper Slack SDK method
-            response = self.slack_client.send(
-                text=message,
-                blocks=[
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": message
-                        }
-                    }
-                ]
-            )
-            
-            # Proper error handling with Slack SDK
+            response = self.slack_client.send(text=message)
             if response.status_code == 200:
                 self.last_alert_time[alert_type] = time.time()
-                print(f"✅ {alert_type.upper()} alert sent successfully to Slack")
+                print(f"✅ {alert_type.upper()} sent to Slack")
                 return True
             else:
-                print(f"❌ Slack API error: {response.status_code} - {response.body}")
+                print(f"❌ Slack error: {response.body}")
                 return False
-                
         except Exception as e:
-            print(f"💥 Error sending Slack alert: {str(e)}")
+            print(f"💥 Slack send failed: {e}")
             return False
     
     def detect_failover(self, pool):
-        """Detect and alert on Blue→Green or Green→Blue failover events"""
+        """Detect Blue→Green or Green→Blue failover"""
         if pool and pool != self.last_seen_pool:
-            print(f"🔄 FAILOVER DETECTED: {self.last_seen_pool.upper()} → {pool.upper()}")
+            print(f"🔄 FAILOVER: {self.last_seen_pool.upper()} → {pool.upper()}")
             
-            message = (f"⚠️ *Failover Event Detected*\n"
-                      f"Traffic automatically switched pools:\n"
-                      f"• From: *{self.last_seen_pool.upper()}* pool\n"  
-                      f"• To: *{pool.upper()}* pool\n"
-                      f"• Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
-                      f"• Window: {self.window_size} requests")
+            message = (f"⚠️ *Failover Detected*\n"
+                      f"Traffic switched from {self.last_seen_pool.upper()} to {pool.upper()} pool\n"
+                      f"• Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
             
             if self.send_slack_alert(message, 'failover'):
                 self.last_seen_pool = pool
-            else:
-                print("❌ Failed to send failover alert")
     
-    def monitor_error_rates(self, log_data):
-        """Monitor elevated upstream 5xx error rates over sliding window"""
+    def monitor_error_rate(self, log_data):
+        """Monitor >2% 5xx error rate over last 200 requests"""
         if log_data.get('upstream_status'):
             self.request_window.append(log_data)
             
@@ -151,62 +112,59 @@ class LogWatcher:
             error_count = sum(1 for req in self.request_window 
                              if req.get('upstream_status', '').startswith('5'))
             
-            # Check if error rate exceeds threshold (with minimum samples)
+            # Show progress for debugging
+            if current_size % 25 == 0:
+                print(f"📈 Error Rate: {error_rate:.1f}% ({error_count}/{current_size})")
+            
+            # Check threshold with minimum samples to avoid false positives
             if current_size >= 50 and error_rate > self.error_threshold and not self.error_alert_sent:
-                print(f"🚨 HIGH ERROR RATE: {error_rate:.1f}% > {self.error_threshold}% threshold")
+                print(f"🚨 HIGH ERROR RATE: {error_rate:.1f}% > {self.error_threshold}%")
                 
                 message = (f"🚨 *High Error Rate Detected*\n"
-                          f"Upstream 5xx errors exceed configured threshold:\n"
-                          f"• Current Rate: `{error_rate:.1f}%`\n"
-                          f"• Threshold: `{self.error_threshold}%`\n" 
-                          f"• Errors: `{error_count}/{current_size}` requests\n"
-                          f"• Window: Last `{self.window_size}` requests\n"
-                          f"• Pool: `{self.current_pool.upper()}`\n"
-                          f"• Time: `{datetime.now().isoformat()}`")
+                          f"Error rate exceeds {self.error_threshold}% threshold\n"
+                          f"• Current Rate: {error_rate:.1f}%\n"
+                          f"• Errors: {error_count}/{current_size} requests\n"
+                          f"• Window: Last {self.window_size} requests\n"
+                          f"• Pool: {self.current_pool.upper()}\n"
+                          f"• Time: {datetime.now().isoformat()}")
                 
                 if self.send_slack_alert(message, 'error_rate'):
                     self.error_alert_sent = True
-                else:
-                    print("❌ Failed to send error rate alert")
             
-            # Reset alert flag when error rate drops
+            # Reset when errors drop
             elif error_rate <= self.error_threshold and self.error_alert_sent:
-                print("📉 Error rate returned to normal levels")
                 self.error_alert_sent = False
     
     def process_log_line(self, line):
-        """Process each nginx log line for alert detection"""
+        """Process each nginx log line"""
         log_data = self.parse_log_line(line)
         if not log_data:
             return
         
         pool = log_data.get('pool')
         
-        # Update current pool and detect failovers
+        # Update pool and detect failovers
         if pool:
             if pool != self.current_pool:
-                old_pool = self.current_pool
                 self.current_pool = pool
                 self.detect_failover(pool)
         
-        # Monitor error rates (primary detection)
-        self.monitor_error_rates(log_data)
+        # Monitor error rates - CRITICAL: This must work!
+        self.monitor_error_rate(log_data)
     
     def watch_logs(self):
-        """Tail nginx logs and process in real-time"""
+        """Tail nginx logs in real time"""
         log_file = '/var/log/nginx/access.log'
         
-        print(f"📁 Monitoring nginx logs: {log_file}")
-        print("🎯 Ready to detect: Failover events & High error rates")
-        print("🔧 Using official Slack SDK for webhook integration")
-        print("=" * 60)
+        print(f"📁 Monitoring: {log_file}")
+        print("🎯 Detecting: Failovers & High Error Rates")
         
         # Wait for log file
         while not os.path.exists(log_file):
-            print(f"⏳ Waiting for nginx log file...")
+            print("⏳ Waiting for nginx logs...")
             time.sleep(2)
         
-        # Efficient file tailing
+        # Track file position
         last_size = 0
         
         while True:
@@ -217,17 +175,15 @@ class LogWatcher:
                     with open(log_file, 'r') as f:
                         f.seek(last_size)
                         new_lines = f.readlines()
-                        last_size = f.tell()
-                    
-                    print(f"📨 Processing {len(new_lines)} new log lines...")
+                        last_size = current_size
                     
                     for line in new_lines:
                         self.process_log_line(line.strip())
                 
-                time.sleep(1)  # Check every second
+                time.sleep(0.5)
                 
             except Exception as e:
-                print(f"❌ Log reading error: {e}, retrying...")
+                print(f"❌ Log error: {e}")
                 time.sleep(2)
 
 if __name__ == '__main__':
