@@ -7,14 +7,22 @@ GREEN_HOST=${GREEN_SERVICE_HOST:-app_green}
 APP_PORT=${APP_PORT:-3000}
 NGINX_CONF=/etc/nginx/conf.d/default.conf
 
-# Remove the symlinks and create actual log files
 setup_log_files() {
     echo "Setting up log files..."
-    # Remove the symlinks if they exist
-    rm -f /var/log/nginx/access.log
-    rm -f /var/log/nginx/error.log
     
-    # Create actual log files
+    # Ensure log directory exists and has proper permissions
+    mkdir -p /var/log/nginx
+    chown -R nginx:nginx /var/log/nginx
+    
+    # Remove the symlinks if they exist
+    if [ -L /var/log/nginx/access.log ]; then
+        rm -f /var/log/nginx/access.log
+    fi
+    if [ -L /var/log/nginx/error.log ]; then
+        rm -f /var/log/nginx/error.log
+    fi
+    
+    # Create actual log files if they don't exist
     touch /var/log/nginx/access.log
     touch /var/log/nginx/error.log
     
@@ -23,6 +31,9 @@ setup_log_files() {
     chown nginx:nginx /var/log/nginx/error.log
     chmod 644 /var/log/nginx/access.log
     chmod 644 /var/log/nginx/error.log
+    
+    echo "Log files setup complete:"
+    ls -la /var/log/nginx/
 }
 
 # Create a custom nginx.conf with our log format in the http context
