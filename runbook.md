@@ -1,14 +1,40 @@
 # Deployment Alerts Runbook
 
-## Alert Types
+## Alert Types and Responses
 
-### 1. Failover Detected
-**Message**: "Failover detected: BLUE → GREEN" or "Failover detected: GREEN → BLUE"
+### 🔴 High Error Rate Alert
+**What happened**: Error rate exceeded configured threshold (default: 2%)
+**Immediate Actions**:
+1. Check which pool is currently active
+2. Review application logs for the failing pool
+3. Check database connections and external dependencies
+4. Verify resource utilization (CPU, Memory, Disk)
+**Follow-up**: Consider rollback if error started after deployment
 
-**What it means**:
-- The primary pool became unhealthy
-- Nginx automatically failed over to the backup pool
-- Users are now being served by the backup pool
+### ⚠️ Failover Alert  
+**What happened**: Traffic automatically switched from primary to backup pool
+**Immediate Actions**:
+1. Identify why primary pool failed
+2. Check if failover was successful
+3. Monitor backup pool performance
+4. Document the incident
+**Follow-up**: Plan primary pool restoration
+
+### ✅ Service Recovery Alert
+**What happened**: Traffic returned to primary pool after failover
+**Immediate Actions**:
+1. Verify primary pool is healthy
+2. Check that all services are responding
+3. Monitor for any residual issues
+**Follow-up**: Analyze root cause of original failure
+
+### 🟢 Error Rate Recovery Alert
+**What happened**: Error rate returned to normal after being elevated
+**Immediate Actions**:
+1. Confirm error rate is stable
+2. Check if automatic recovery occurred or if intervention was needed
+3. Update monitoring if needed
+**Follow-up**: Document resolution for future reference
 
 **Immediate Actions**:
 1. Check primary pool health:

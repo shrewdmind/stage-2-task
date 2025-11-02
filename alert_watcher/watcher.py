@@ -18,6 +18,8 @@ class LogWatcher:
         self.last_alert_time = {}
         self.current_pool = os.getenv('INITIAL_ACTIVE_POOL', 'blue')
         self.last_seen_pool = self.current_pool
+        self.failover_count = 0
+        self.primary_recovered = False
         
         self.slack_client = WebhookClient(self.slack_webhook) if self.slack_webhook else None
         
@@ -54,8 +56,8 @@ class LogWatcher:
         last_time = self.last_alert_time.get(alert_type, 0)
         return (now - last_time) >= self.cooldown_sec
     
-    def send_slack_alert(self, message, alert_type):
-        """Send alert to Slack"""
+    def send_slack_alert(self, message, alert_type, severity="warning"):
+        """Send detailed alert to Slack"""
         if self.maintenance_mode:
             print(f"MAINTENANCE MODE: Suppressing alert: {message}")
             return
@@ -68,6 +70,14 @@ class LogWatcher:
             print(f"COOLDOWN: Suppressing {alert_type} alert: {message}")
             return
         
+        # Color coding based on severity
+        color = {
+            "warning": "#FFA500",  # Orange
+            "error": "#FF0000",    # Red
+            "info": "#36A64F",     # Green
+            "recovery": "#00FF00"  # Bright Green
+        }.get(severity, "#FFA500")
+        
         try:
             response = self.slack_client.send(
                 text=message,
@@ -76,15 +86,18 @@ class LogWatcher:
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"🚨 *Deployment Alert*\n{message}"
+                            "text": f"🚨 *Deployment Alert - {severity.upper()}*\n{message}"
                         }
+                    },
+                    {
+                        "type": "divider"
                     },
                     {
                         "type": "context",
                         "elements": [
                             {
                                 "type": "mrkdwn",
-                                "text": f"Environment: {os.getenv('ENVIRONMENT', 'unknown')} | Time: {datetime.now().isoformat()}"
+                                "text": f"🕒 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')} | 🔧 Environment: {os.getenv('ENVIRONMENT', 'production')} | 📊 Window: {self.window_size} requests"
                             }
                         ]
                     }
@@ -99,22 +112,74 @@ class LogWatcher:
             print(f"Error sending Slack alert: {e}")
     
     def detect_failover(self, pool):
-        """Detect and alert on failover events"""
+        """Detect and alert on failover events with detailed information"""
         if pool and pool != self.last_seen_pool:
-            message = f"Failover detected: {self.last_seen_pool.upper()} → {pool.upper()}"
-            self.send_slack_alert(message, 'failover')
+            self.failover_count += 1
+            
+            # Determine if this is a recovery (back to original) or new failover
+            if pool == os.getenv('INITIAL_ACTIVE_POOL', 'blue'):
+                message = (f"✅ *Service Recovery*\n"
+                          f"Traffic has returned to the primary {pool.upper()} pool.\n"
+                          f"• Previous pool: {self.last_seen_pool.upper()}\n"
+                          f"• Current pool: {pool.upper()}\n"
+                          f"• Total failovers in session: {self.failover_count}")
+                self.send_slack_alert(message, 'recovery', 'recovery')
+                self.primary_recovered = True
+            else:
+                message = (f"⚠️ *Failover Detected*\n"
+                          f"Automatic failover from {self.last_seen_pool.upper()} to {pool.upper()} pool.\n"
+                          f"• Failed pool: {self.last_seen_pool.upper()}\n"
+                          f"• Backup pool: {pool.upper()}\n"
+                          f"• Failover count: {self.failover_count}\n"
+                          f"• Timestamp: {datetime.now().strftime('%H:%M:%S')}")
+                self.send_slack_alert(message, 'failover', 'error')
+                self.primary_recovered = False
+            
             self.last_seen_pool = pool
     
     def monitor_error_rate(self, log_data):
-        """Monitor and alert on error rates"""
+        """Monitor and alert on error rates with detailed metrics"""
         if log_data.get('upstream_status'):
             self.request_window.append(log_data)
             error_rate = self.calculate_error_rate()
             
             if error_rate > self.error_threshold:
-                message = (f"High error rate detected: {error_rate:.1f}% "
-                          f"(threshold: {self.error_threshold}% over last {self.window_size} requests)")
-                self.send_slack_alert(message, 'error_rate')
+                error_count = sum(1 for req in self.request_window 
+                                 if req.get('upstream_status', '').startswith('5'))
+                total_requests = len(self.request_window)
+                
+                message = (f"🔴 *High Error Rate Alert*\n"
+                          f"Current error rate {error_rate:.1f}% exceeds threshold of {self.error_threshold}%.\n"
+                          f"• Errors: {error_count}/{total_requests} requests\n"
+                          f"• Current pool: {self.current_pool.upper()}\n"
+                          f"• Time window: Last {total_requests} requests\n"
+                          f"• Threshold: {self.error_threshold}%\n\n"
+                          f"*Recommended Actions:*\n"
+                          f"• Check application logs for errors\n"
+                          f"• Verify database connections\n"
+                          f"• Check resource utilization\n"
+                          f"• Consider rolling back if recent deployment")
+                
+                self.send_slack_alert(message, 'error_rate', 'error')
+    
+    def monitor_service_health(self, log_data):
+        """Monitor for service recovery and health improvements"""
+        if log_data.get('upstream_status') and not log_data['upstream_status'].startswith('5'):
+            # Check if we recently had high errors but now seeing success
+            if len(self.request_window) >= 10:  # Only check if we have enough data
+                recent_errors = sum(1 for req in list(self.request_window)[-10:] 
+                                  if req.get('upstream_status', '').startswith('5'))
+                
+                if recent_errors == 0 and self.last_alert_time.get('error_rate', 0) > 0:
+                    # We had errors before but now recovering
+                    time_since_last_error_alert = time.time() - self.last_alert_time.get('error_rate', 0)
+                    if time_since_last_error_alert < 600:  # Only alert if recovery within 10 min of error
+                        message = (f"🟢 *Error Rate Recovery*\n"
+                                  f"Error rate has returned to normal levels.\n"
+                                  f"• Last {len(self.request_window)} requests: 0 errors\n"
+                                  f"• Current pool: {self.current_pool.upper()}\n"
+                                  f"• Recovery time: {datetime.now().strftime('%H:%M:%S')}")
+                        self.send_slack_alert(message, 'recovery', 'info')
     
     def process_log_line(self, line):
         """Process a single log line"""
@@ -129,6 +194,9 @@ class LogWatcher:
         
         # Monitor error rates
         self.monitor_error_rate(log_data)
+        
+        # Monitor service health recovery
+        self.monitor_service_health(log_data)
         
         # Update current pool for tracking
         if pool:
@@ -152,7 +220,7 @@ class LogWatcher:
         
         print(f"Monitoring log file: {log_file}")
         
-        # Simple tail implementation without seeking
+        # Simple tail implementation
         while True:
             try:
                 with open(log_file, 'r') as f:
